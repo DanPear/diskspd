@@ -34,6 +34,11 @@ SOFTWARE.
 #include <stdio.h>
 #include <stdlib.h>
 
+#pragma push_macro("min")
+#pragma push_macro("max")
+#undef min
+#undef max
+
 CmdLineParser::CmdLineParser() :
     _dwBlockSize(64 * 1024),
     _ulWriteRatio(0),
@@ -150,7 +155,9 @@ void CmdLineParser::_DisplayUsageInfo(const char *pszFilename) const
     printf("                                    -ag0,0,1,2 -ag1,0,1,2 is equivalent.\n");
     printf("  -b<size>[K|M|G]       block size in bytes or KiB/MiB/GiB [default=64K]\n");
     printf("  -B<offs>[K|M|G|b]     base target offset in bytes or KiB/MiB/GiB/blocks [default=0]\n");
-    printf("                          (offset from the beginning of the file)\n");
+	printf("                          (offset from the beginning of the file)\n");
+	printf("  -BL#,#[,#,...]        List of fixed histogram bucket latencies\n");
+	printf("                          Example: -BL0.1,0.2,0.5,1.0,1.5,2.0,2.5,3.0,3.5,4.0,4.5,...,120000.0,600000.0\n");
     printf("  -c<size>[K|M|G|b]     create files of the given size.\n");
     printf("                          Size can be stated in bytes or KiB/MiB/GiB/blocks\n");
     printf("  -C<seconds>           cool down time - duration of the test after measurements finished [default=0s].\n");
@@ -158,7 +165,8 @@ void CmdLineParser::_DisplayUsageInfo(const char *pszFilename) const
     printf("                          per-target: text output provides IOPs standard deviation, XML provides the full\n");
     printf("                          IOPs time series in addition. [default=1000, 1 second].\n");
     printf("  -d<seconds>           duration (in seconds) to run test [default=10s]\n");
-    printf("  -f<size>[K|M|G|b]     target size - use only the first <size> bytes or KiB/MiB/GiB/blocks of the file/disk/partition,\n");
+	printf("  -dbg                  Output to Windows Debug Console\n");
+	printf("  -f<size>[K|M|G|b]     target size - use only the first <size> bytes or KiB/MiB/GiB/blocks of the file/disk/partition,\n");
     printf("                          for example to test only the first sectors of a disk\n");
     printf("  -f<rst>               open file with one or more additional access hints\n");
     printf("                          r : the FILE_FLAG_RANDOM_ACCESS hint\n");
@@ -487,6 +495,43 @@ bool CmdLineParser::_ParseAffinity(const char *arg, TimeSpan *pTimeSpan)
     return fOk;
 }
 
+bool CmdLineParser::_ParseHistogramBucketList(const char* arg, TimeSpan* pTimeSpan)
+{
+	bool fOk = true;
+
+	HistogramBucketListPtr histogramBucketList = std::make_shared<HistogramBucketList>();
+	std::stringstream reader(arg);
+
+	float nextBucketValue = 0;
+	histogramBucketList->push_back(nextBucketValue);
+
+	while (!reader.eof())
+	{
+		reader >> nextBucketValue;
+		if (reader.bad() || reader.fail())
+		{
+			fprintf(stderr, "ERROR: Invalid Histogram Bucket List: %s\n", arg);
+			fOk = false;
+		}
+
+		histogramBucketList->push_back(nextBucketValue);
+
+		if (reader.peek() == ',')
+		{
+			reader.ignore();
+		}
+	}
+
+	if (fOk)
+	{
+		histogramBucketList->push_back(std::numeric_limits<float>::max());
+
+		pTimeSpan->SetHistogramBucketList(histogramBucketList);
+	}
+
+	return fOk;
+}
+
 bool CmdLineParser::_ParseFlushParameter(const char *arg, MemoryMappedIoFlushMode *FlushMode)
 {
     assert(nullptr != arg);
@@ -613,8 +658,15 @@ bool CmdLineParser::_ReadParametersFromCmdLine(const int argc, const char *argv[
             // nop - block size has been taken care of before the loop
             break;
 
-        case 'B':    //base file offset (offset from the beginning of the file)
-            if (*(arg + 1) != '\0')
+        case 'B':    //base file offset (offset from the beginning of the file) or HistogramBucketList
+			if (*(arg + 1) == 'L')
+			{
+				if (!_ParseHistogramBucketList(arg + 2, &timeSpan))
+				{
+					fError = true;
+				}
+			}
+			else if (*(arg + 1) != '\0')
             {
                 UINT64 cb;
                 if (_GetSizeInBytes(arg + 1, cb))
@@ -676,15 +728,22 @@ bool CmdLineParser::_ReadParametersFromCmdLine(const int argc, const char *argv[
 
         case 'd':    //duration
             {
-                int x = atoi(arg + 1);
-                if (x > 0)
-                {
-                    timeSpan.SetDuration(x);
-                }
-                else
-                {
-                    fError = true;
-                }
+				if ((*(arg + 1) == 'b') && (*(arg + 2) == 'g'))
+				{
+					pProfile->SetDbgOutput(true);
+				}
+				else
+				{
+					int x = atoi(arg + 1);
+					if (x > 0)
+					{
+						timeSpan.SetDuration(x);
+					}
+					else
+					{
+						fError = true;
+					}
+				}
             }
             break;
 
@@ -1433,3 +1492,6 @@ bool CmdLineParser::ParseCmdLine(const int argc, const char *argv[], Profile *pP
 
     return fOk;
 }
+
+#pragma pop_macro("min")
+#pragma pop_macro("max")
